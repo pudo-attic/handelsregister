@@ -93,15 +93,16 @@ def parse_results(sess, state, i, page):
             if len(current_html):
                 current_html = '<table>%s</table>' % current_html
                 scrape_ut(sess, state, results, i, current_html,
-                          current_index)
+                          current_index, page)
                 current_index += 1
                 current_html = ''
         current_html += html.tostring(tr)
     return results, current_index
 
 
-def scrape_ut(sess, state, results, i, index_html, index):
-    if companies.find_one(state=state, number=i, result=index):
+def scrape_ut(sess, state, results, i, index_html, index, page):
+    if companies.find_one(state=state, number=i,
+                          result=index, result_page=page):
         return
     try:
         res = sess.get(DOC_URL % index)
@@ -114,11 +115,12 @@ def scrape_ut(sess, state, results, i, index_html, index):
             'state': state,
             'number': i,
             'result': index,
+            'result_page': page,
             'result_count': results,
             'result_html': index_html,
             'ut_html': ut_html
         }
-        companies.upsert(data, ['state', 'number', 'result'])
+        companies.upsert(data, ['state', 'number', 'result', 'result_page'])
     except Exception, e:
         print e
         time.sleep(5)
