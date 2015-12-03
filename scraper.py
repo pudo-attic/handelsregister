@@ -1,14 +1,21 @@
 import os
 import time
+import logging
 import requests
 import dataset
 from lxml import html
 from itertools import count
 # from thready import threaded
 
+log = logging.getLogger(__name__)
+
 db = os.environ.get('DATABASE_URI', 'sqlite:///data.sqlite')
 engine = dataset.connect(db)
 companies = engine['de_handelsregister']
+
+logging.basicConfig(level=logging.DEBUG)
+requests_log = logging.getLogger("requests")
+requests_log.setLevel(logging.WARNING)
 
 PAGE_SIZE = 100
 SEARCH_URL = 'https://www.handelsregister.de/rp_web/mask.do?Typ=e'
@@ -59,22 +66,23 @@ def scrape_state(q, state):
         results = 0
         page = 1
         while True:
-            total, page_results = parse_results(sess, state, i, res.content)
+            total, page_results = parse_results(sess, state, i, res.content,
+                                                page)
             results += page_results
             if total == -1:
                 failed_state += 1
                 break
             else:
                 failed_state = 0
-            print 'PAGE', total, page, page_results, results
+            # print 'PAGE', total, page, page_results, results
             if results >= total:
                 break
             page += 1
             res = sess.get(PAGE_URL % page)
 
 
-def parse_results(sess, state, i, page):
-    doc = html.fromstring(page)
+def parse_results(sess, state, i, page_html, page):
+    doc = html.fromstring(page_html)
     content = doc.find('.//div[@id="inhalt"]')
 
     count_text = content.findtext('./p')
@@ -83,7 +91,8 @@ def parse_results(sess, state, i, page):
     _, count_text = count_text.split('hat', 1)
     count_text, _ = count_text.split('Treffer', 1)
     results = int(count_text)
-    print 'Reg %s (%s): %s' % (state, i, results)
+    log.info('Register %s (#%s): %s results, page: %s',
+             state, i, results, page)
 
     current_html = ''
     current_index = 0
@@ -105,20 +114,25 @@ def scrape_ut(sess, state, results, i, index_html, index, page):
                           result=index, result_page=page):
         return
     try:
+        doc = html.fromstring(index_html)
+        title = doc.findtext('.//td[@class="RegPortErg_FirmaKopf"]')
+
         res = sess.get(DOC_URL % index)
         doc = html.fromstring(res.content)
         content = doc.find('.//div[@id="inhalt"]')
         if content is None:
             return
         ut_html = html.tostring(content)
+        log.info("UT (%s/%s): %s", state, i, title)
         data = {
             'state': state,
             'number': i,
             'result': index,
+            'title': title,
             'result_page': page,
             'result_count': results,
-            'result_html': index_html,
-            'ut_html': ut_html
+            'result_html': index_html.encode('utf-8'),
+            'ut_html': ut_html.encode('utf-8')
         }
         companies.upsert(data, ['state', 'number', 'result', 'result_page'])
     except Exception, e:
