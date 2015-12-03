@@ -61,8 +61,14 @@ def scrape_state(q, state):
             continue
 
         q["registerNummer"] = i
-        sess = requests.Session()
-        res = sess.post(SEARCH_URL, data=q)
+        try:
+            sess = requests.Session()
+            res = sess.post(SEARCH_URL, data=q)
+        except Exception, e:
+            log.exception(e)
+            time.sleep(10)
+            continue
+
         results = 0
         page = 1
         while True:
@@ -78,7 +84,12 @@ def scrape_state(q, state):
             if results >= total:
                 break
             page += 1
-            res = sess.get(PAGE_URL % page)
+            try:
+                res = sess.get(PAGE_URL % page)
+            except Exception, e:
+                log.exception(e)
+                time.sleep(10)
+                break
 
 
 def parse_results(sess, state, i, page_html, page):
@@ -136,7 +147,7 @@ def scrape_ut(sess, state, results, i, index_html, index, page):
         }
         companies.upsert(data, ['state', 'number', 'result', 'result_page'])
     except Exception, e:
-        print e
+        log.exception(e)
         time.sleep(5)
 
 
