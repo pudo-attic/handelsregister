@@ -5,7 +5,7 @@ import requests
 import dataset
 from lxml import html
 from itertools import count
-# from thready import threaded
+from thready import threaded
 
 log = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logging.basicConfig(level=logging.DEBUG)
 requests_log = logging.getLogger("requests")
 requests_log.setLevel(logging.WARNING)
 
-PAGE_SIZE = 100
+PAGE_SIZE = 10
 SEARCH_URL = 'https://www.handelsregister.de/rp_web/mask.do?Typ=e'
 PAGE_URL = 'https://www.handelsregister.de/rp_web/result.do?Page=%s'
 DOC_URL = 'https://www.handelsregister.de/rp_web/document.do?doctyp=UT&index=%s'
@@ -44,13 +44,18 @@ QUERY = {
 
 
 def scrape_states():
-    for state in STATES:
-        q = QUERY.copy()
-        q['bundesland' + state] = "on"
-        scrape_state(q, state)
+    def states():
+        for state in STATES:
+            q = QUERY.copy()
+            q['bundesland' + state] = "on"
+            yield (q, state)
+    # for s in states():
+    #     scrape_state(s)
+    threaded(states(), scrape_state, num_threads=5)
 
 
-def scrape_state(q, state):
+def scrape_state(arg):
+    q, state = arg
     failed_state = 0
     for i in count(1):
         if failed_state > 1000:
@@ -64,6 +69,8 @@ def scrape_state(q, state):
         try:
             sess = requests.Session()
             res = sess.post(SEARCH_URL, data=q)
+            if '403.html' in res.url:
+                raise ValueError()
         except Exception, e:
             log.exception(e)
             time.sleep(10)
@@ -71,9 +78,10 @@ def scrape_state(q, state):
 
         results = 0
         page = 1
+        page_results = 0
         while True:
             total, page_results = parse_results(sess, state, i, res.content,
-                                                page)
+                                                page, page_results)
             results += page_results
             if total == -1:
                 failed_state += 1
@@ -84,15 +92,18 @@ def scrape_state(q, state):
             if results >= total:
                 break
             page += 1
+            page_results = page_results + 1
             try:
                 res = sess.get(PAGE_URL % page)
+                if '403.html' in res.url:
+                    raise ValueError()
             except Exception, e:
                 log.exception(e)
                 time.sleep(10)
                 break
 
 
-def parse_results(sess, state, i, page_html, page):
+def parse_results(sess, state, i, page_html, page, current_index):
     doc = html.fromstring(page_html)
     content = doc.find('.//div[@id="inhalt"]')
 
@@ -105,36 +116,50 @@ def parse_results(sess, state, i, page_html, page):
     log.info('Register %s (#%s): %s results, page: %s',
              state, i, results, page)
 
-    current_html = ''
-    current_index = 0
+    current_html = None
+
     for tr in content.findall('./table[@class="RegPortErg"]/tr'):
         tds = tr.findall('./td')
         if len(tds) == 1 and tds[0].get('class') == 'RegPortErg_AZ':
-            if len(current_html):
-                current_html = '<table>%s</table>' % current_html
-                scrape_ut(sess, state, results, i, current_html,
+            if current_html and len(current_html):
+                chtml = '<table>%s</table>' % current_html
+                scrape_ut(sess, state, results, i, chtml,
                           current_index, page)
                 current_index += 1
-                current_html = ''
-        current_html += html.tostring(tr)
+
+            current_html = ''
+
+        if current_html is not None:
+            current_html += html.tostring(tr)
+
+    if current_html and len(current_html):
+        chtml = '<table>%s</table>' % current_html
+        scrape_ut(sess, state, results, i, chtml,
+                  current_index, page)
+
     return results, current_index
 
 
 def scrape_ut(sess, state, results, i, index_html, index, page):
+    # print results, i, index, page
     if companies.find_one(state=state, number=i,
                           result=index, result_page=page):
         return
     try:
         doc = html.fromstring(index_html)
         title = doc.findtext('.//td[@class="RegPortErg_FirmaKopf"]')
-
         res = sess.get(DOC_URL % index)
+        if '403.html' in res.url:
+            raise ValueError()
         doc = html.fromstring(res.content)
         content = doc.find('.//div[@id="inhalt"]')
+        # ut_title = content.find('.//td//b')
+        # if ut_title is not None:
+        #     ut_title = ut_title.tail.strip()
         if content is None:
             return
         ut_html = html.tostring(content)
-        log.info("UT (%s/%s): %s", state, i, title)
+        log.info("UT (%s/%s-%s): %s", state, i, index, title)
         data = {
             'state': state,
             'number': i,
